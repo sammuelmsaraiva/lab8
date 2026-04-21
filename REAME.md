@@ -1,80 +1,66 @@
-# Lab 7 - Especialização de LLMs com LoRA e QLoRA
+# Lab 8 - Alinhamento Humano com DPO
 
-Pipeline completo de fine-tuning de um modelo de linguagem fundacional (LLaMA-2 7B) utilizando PEFT/LoRA com quantização QLoRA (4-bit NF4), viabilizando o treinamento em hardware limitado.
+Pipeline completo de alinhamento de um LLM utilizando Direct Preference Optimization (DPO), substituindo o complexo pipeline de RLHF. O objetivo é garantir que o modelo seja Útil, Honesto e Inofensivo (HHH — Helpful, Honest, Harmless), suprimindo respostas tóxicas ou maliciosas.
 
 ## Pré-requisitos
 
 ```
-pip install torch transformers datasets peft trl bitsandbytes openai accelerate
+pip install torch transformers datasets peft trl bitsandbytes accelerate
 ```
 
-> **Requisito de hardware:** GPU com mínimo 16 GB de VRAM (recomendado Google Colab Pro com A100) ou GPU consumer 24 GB com QLoRA.
+> **Hardware recomendado:** Google Colab Pro com GPU A100 (40 GB VRAM).
 
 ## Estrutura do Projeto
 
 ```
-lab7/
-├── gerar_dataset.py       # Passo 1: geração do dataset via API OpenAI
-├── lab7.py                # Passos 2-5: pipeline completo QLoRA + SFTTrainer
-├── dataset_treino.jsonl   # 45 pares de instrução/resposta (domínio: IA/ML)
-├── dataset_teste.jsonl    # 5 pares para avaliação
+lab8/
+├── lab8.py              # Pipeline completo DPO (4 passos)
+├── dataset_hhh.jsonl    # Dataset de preferências HHH (31 pares)
 └── README.md
 ```
 
 ## Como Executar
 
-### Passo 1 — Gerar dataset (opcional, já incluído)
 ```bash
-export OPENAI_API_KEY="sua_chave_aqui"
-python3 gerar_dataset.py
-```
-Os arquivos `dataset_treino.jsonl` e `dataset_teste.jsonl` já estão incluídos no repositório com 50 pares gerados sobre o domínio de Inteligência Artificial e Aprendizado de Máquina.
-
-### Passo 2 a 5 — Fine-tuning QLoRA
-```bash
-# Necessário aceitar os termos do LLaMA-2 no Hugging Face e fazer login:
 huggingface-cli login
-python3 lab7.py
+python3 lab8.py
 ```
 
-## Configurações Implementadas
+## Dataset de Preferências (Passo 1)
 
-### Quantização (Passo 2)
-| Parâmetro           | Valor    |
-|---------------------|----------|
-| load_in_4bit        | True     |
-| quant_type          | nf4      |
-| compute_dtype       | float16  |
-| double_quant        | True     |
+O arquivo `dataset_hhh.jsonl` contém 31 pares no formato obrigatório com as chaves `prompt`, `chosen` e `rejected`, cobrindo categorias de segurança como:
 
-### LoRA (Passo 3)
-| Parâmetro           | Valor               |
-|---------------------|---------------------|
-| rank (r)            | 64                  |
-| alpha               | 16                  |
-| dropout             | 0.1                 |
-| task_type           | CAUSAL_LM           |
-| target_modules      | q_proj, k_proj, v_proj, o_proj |
+- Ataques a sistemas e bancos de dados
+- Violação de privacidade e interceptação de comunicações
+- Geração de malware e ransomware
+- Fraude financeira e lavagem de dinheiro
+- Discurso de ódio e incitação à violência
+- Desinformação e deepfakes
+- Manipulação psicológica e assédio
 
-### Otimizador e Scheduler (Passo 4)
-| Parâmetro           | Valor               |
-|---------------------|---------------------|
-| otimizador          | paged_adamw_32bit   |
-| lr_scheduler        | cosine              |
-| warmup_ratio        | 0.03                |
-| learning_rate       | 2e-4                |
-| epochs              | 3                   |
-| batch_size          | 4                   |
-| grad_accumulation   | 4 (efetivo: 16)     |
+## Configurações Implementadas (Passos 2 e 3)
 
-## Resultado Esperado
+| Parâmetro           | Valor             |
+|---------------------|-------------------|
+| beta (DPO)          | 0.1               |
+| LoRA rank           | 64                |
+| LoRA alpha          | 16                |
+| LoRA dropout        | 0.1               |
+| otimizador          | paged_adamw_32bit |
+| lr_scheduler        | cosine            |
+| warmup_ratio        | 0.03              |
+| quantização         | 4-bit NF4         |
 
-O modelo adaptado deve responder perguntas sobre IA/ML com qualidade notavelmente superior ao modelo base para o domínio específico. O adaptador LoRA resultante ocupa apenas alguns MB, em contraste com os ~14 GB do modelo base em float16.
+## O Papel Matemático do Parâmetro Beta (β)
 
-## Ferramentas utilizadas
+O DPO otimiza diretamente a política do modelo sem um modelo de recompensa explícito. A função objetivo é:
 
-- **OpenAI API**: geração do dataset sintético de instrução (Passo 1) — `gerar_dataset.py`
-- **bitsandbytes**: quantização 4-bit NF4 para redução de memória (Passo 2)
-- **peft**: configuração e aplicação do LoRA sobre o modelo base (Passo 3)
-- **trl/SFTTrainer**: orquestração do training loop com PEFT integrado (Passo 4)
-- **transformers**: carregamento do modelo LLaMA-2 e tokenizador
+```
+L_DPO(π_θ) = -E[ log σ( β · log(π_θ(y_w|x)/π_ref(y_w|x)) - β · log(π_θ(y_l|x)/π_ref(y_l|x)) ) ]
+```
+
+onde `y_w` é a resposta escolhida (*chosen*), `y_l` é a resposta rejeitada (*rejected*) e `π_ref` é o modelo de referência congelado.
+
+O **β funciona como um imposto de regularização** sobre a divergência de Kullback-Leibler (KL) entre o modelo em treinamento (ator) e o modelo de referência. Matematicamente, ele controla o trade-off entre duas forças opostas: maximizar a probabilidade das respostas *chosen* em relação às *rejected* e manter a distribuição do modelo próxima à distribuição original pré-treinada.
+
+Um **β próximo de zero** torna o modelo agressivo na otimização de preferências, podendo colapsar a fluência e diversidade da linguagem — o modelo "esquece" como escrever de forma natural ao focar apenas em preferir *chosen* sobre *rejected*. Um **β muito alto** mantém o modelo quase idêntico à referência, tornando o alinhamento ineficaz. O valor **β = 0.1** é o padrão da literatura (paper original DPO, Rafailov et al., 2023) por equilibrar alinhamento efetivo com preservação da fluência e capacidade geral do modelo base.
